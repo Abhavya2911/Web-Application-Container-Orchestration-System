@@ -1,21 +1,3 @@
-/*
- * OS Scheduling Engine (C)
- * Algorithms : FCFS, RR (Round Robin)
- * Also does  : resource allocation (CPU + memory) of workloads onto worker nodes.
- *
- * Input (stdin):
- *   <ALGO> <QUANTUM>                      e.g. "RR 2"  or "FCFS 1"
- *   <nodeCount>
- *   <nodeId> <freeCpu> <freeMemMb>        (one line per node)
- *   <workloadCount>
- *   <id> <arrival> <burst> <priority> <cpu> <memMb>   (one line per workload)
- *
- * Output (stdout): one JSON object (see print_json).
- *
- * Model: each worker node is one "CPU". Workloads are first allocated to nodes
- * (worst-fit on free CPU -> balances load), then each node's queue is scheduled
- * independently with the chosen algorithm.
- */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,7 +6,7 @@ typedef struct { int id; double cpu; int mem; } Node;
 typedef struct {
     int id, arrival, burst, priority, mem;
     double cpu;
-    int node;       /* index into nodes[], -1 = rejected (no node had room) */
+    int node;      
     int remaining, start, completion;
 } Work;
 typedef struct { int node_id, work_id, start, end; } Seg;
@@ -36,11 +18,10 @@ static Seg *segs;   static int ns = 0;
 static int cmp_arrival(const void *a, const void *b) {
     int i = *(const int *)a, j = *(const int *)b;
     if (works[i].arrival != works[j].arrival) return works[i].arrival - works[j].arrival;
-    return i - j; /* stable: keep submission order on ties */
+    return i - j; 
 }
 
 static void add_seg(int node, int w, int s, int e) {
-    /* merge with previous segment if the same workload keeps running */
     if (ns > 0 && segs[ns-1].node_id == nodes[node].id && segs[ns-1].work_id == works[w].id
         && segs[ns-1].end == s) { segs[ns-1].end = e; return; }
     segs[ns].node_id = nodes[node].id; segs[ns].work_id = works[w].id;
@@ -71,6 +52,116 @@ static void fcfs(int node, int *q, int m) {
     }
 }
 
+/* ---------- SJF (Non-preemptive) ---------- */
+static void sjf(int node, int *q, int m) {
+    int t = 0;
+    int done = 0;
+    int *finished = calloc(m, sizeof(int));
+
+    while (done < m) {
+        int best = -1;
+
+        for (int k = 0; k < m; k++) {
+            int i = q[k];
+            Work *w = &works[i];
+
+            if (finished[k] || w->arrival > t)
+                continue;
+
+            if (best < 0 ||
+                w->burst < works[q[best]].burst ||
+                (w->burst == works[q[best]].burst &&
+                 w->arrival < works[q[best]].arrival)) {
+                best = k;
+            }
+        }
+
+        if (best < 0) {
+            int next = -1;
+
+            for (int k = 0; k < m; k++) {
+                if (!finished[k] &&
+                    (next < 0 ||
+                     works[q[k]].arrival < works[q[next]].arrival)) {
+                    next = k;
+                }
+            }
+
+            t = works[q[next]].arrival;
+            continue;
+        }
+
+        Work *w = &works[q[best]];
+
+        w->start = t;
+        t += w->burst;
+        w->completion = t;
+        w->remaining = 0;
+
+        add_seg(node, q[best], w->start, w->completion);
+
+        finished[best] = 1;
+        done++;
+    }
+
+    free(finished);
+}
+
+/* ---------- Priority Scheduling (Non-preemptive) ---------- */
+static void priority_scheduling(int node, int *q, int m) {
+    int t = 0;
+    int done = 0;
+    int *finished = calloc(m, sizeof(int));
+
+    while (done < m) {
+        int best = -1;
+
+        for (int k = 0; k < m; k++) {
+            int i = q[k];
+            Work *w = &works[i];
+
+            if (finished[k] || w->arrival > t)
+                continue;
+
+            if (best < 0 ||
+                w->priority < works[q[best]].priority ||
+                (w->priority == works[q[best]].priority &&
+                 w->arrival < works[q[best]].arrival)) {
+                best = k;
+            }
+        }
+
+        if (best < 0) {
+            int next = -1;
+
+            for (int k = 0; k < m; k++) {
+                if (!finished[k] &&
+                    (next < 0 ||
+                     works[q[k]].arrival < works[q[next]].arrival)) {
+                    next = k;
+                }
+            }
+
+            t = works[q[next]].arrival;
+            continue;
+        }
+
+        Work *w = &works[q[best]];
+
+        w->start = t;
+        t += w->burst;
+        w->completion = t;
+        w->remaining = 0;
+
+        add_seg(node, q[best], w->start, w->completion);
+
+        finished[best] = 1;
+        done++;
+    }
+
+    free(finished);
+}
+
 /* ---------- Round Robin ---------- */
 static void round_robin(int node, int *q, int m, int quantum) {
     long cap = m + 1;
@@ -80,18 +171,96 @@ static void round_robin(int node, int *q, int m, int quantum) {
 
     while (done < m) {
         while (next < m && works[q[next]].arrival <= t) rq[tail++] = q[next++];
-        if (head == tail) { t = works[q[next]].arrival; continue; } /* CPU idle */
+        if (head == tail) { t = works[q[next]].arrival; continue; }
         int p = rq[head++];
         Work *w = &works[p];
-        if (w->start < 0) w->start = t;                 /* first time on CPU = response */
+        if (w->start < 0) w->start = t;                
         int run = w->remaining < quantum ? w->remaining : quantum;
         add_seg(node, p, t, t + run);
         t += run; w->remaining -= run;
-        while (next < m && works[q[next]].arrival <= t) rq[tail++] = q[next++]; /* arrivals first */
+        while (next < m && works[q[next]].arrival <= t) rq[tail++] = q[next++]; 
         if (w->remaining > 0) rq[tail++] = p;
         else { w->completion = t; done++; }
     }
     free(rq);
+}
+
+/* ---------- SRTF (Preemptive) ---------- */
+static void srtf(int node, int *q, int m) {
+    int t = 0;
+    int done = 0;
+
+    while (done < m) {
+        int best = -1;
+
+        /* Find arrived workload with shortest remaining time */
+        for (int k = 0; k < m; k++) {
+            int i = q[k];
+            Work *w = &works[i];
+
+            if (w->remaining <= 0 || w->arrival > t)
+                continue;
+
+            if (best < 0 ||
+                w->remaining < works[q[best]].remaining ||
+                (w->remaining == works[q[best]].remaining &&
+                 w->arrival < works[q[best]].arrival)) {
+                best = k;
+            }
+        }
+
+        /* No workload available: jump to next arrival */
+        if (best < 0) {
+            int next = -1;
+
+            for (int k = 0; k < m; k++) {
+                if (works[q[k]].remaining > 0 &&
+                    (next < 0 ||
+                     works[q[k]].arrival < works[q[next]].arrival)) {
+                    next = k;
+                }
+            }
+
+            if (next < 0)
+                break;
+
+            t = works[q[next]].arrival;
+            continue;
+        }
+
+        Work *w = &works[q[best]];
+
+        if (w->start < 0)
+            w->start = t;
+
+        /* Run until completion or next arrival */
+        int run = w->remaining;
+        int next_arrival = -1;
+
+        for (int k = 0; k < m; k++) {
+            Work *other = &works[q[k]];
+
+            if (other->remaining > 0 && other->arrival > t) {
+                if (next_arrival < 0 ||
+                    other->arrival < next_arrival) {
+                    next_arrival = other->arrival;
+                }
+            }
+        }
+
+        if (next_arrival >= 0 && next_arrival - t < run)
+            run = next_arrival - t;
+
+        add_seg(node, q[best], t, t + run);
+
+        t += run;
+        w->remaining -= run;
+
+        if (w->remaining == 0) {
+            w->completion = t;
+            done++;
+        }
+    }
 }
 
 static void print_json(const char *algo, int quantum) {
@@ -123,7 +292,15 @@ static void print_json(const char *algo, int quantum) {
 int main(void) {
     char algo[16]; int quantum;
     if (scanf("%15s %d", algo, &quantum) != 2) { fprintf(stderr, "bad header\n"); return 1; }
-    if (strcmp(algo, "FCFS") && strcmp(algo, "RR")) { fprintf(stderr, "unknown algorithm %s\n", algo); return 1; }
+    if (strcmp(algo, "FCFS") &&
+    strcmp(algo, "RR") &&
+    strcmp(algo, "SJF") &&
+    strcmp(algo, "PRIORITY") &&
+    strcmp(algo, "SRTF")) {
+
+    fprintf(stderr, "unknown algorithm %s\n", algo);
+    return 1;
+}
     if (quantum < 1) quantum = 1;
 
     if (scanf("%d", &nn) != 1 || nn < 0) return 1;
@@ -141,7 +318,8 @@ int main(void) {
         w->remaining = w->burst; w->start = -1; w->completion = 0;
         segCap += w->burst / quantum + 1;
     }
-    segs = malloc(sizeof(Seg) * segCap);
+    segCap += (long)nw * nw + 100;
+segs = malloc(sizeof(Seg) * segCap);
 
     allocate();
 
@@ -151,8 +329,21 @@ int main(void) {
         for (int i = 0; i < nw; i++) if (works[i].node == n) q[m++] = i;
         if (m == 0) continue;
         qsort(q, m, sizeof(int), cmp_arrival);
-        if (!strcmp(algo, "FCFS")) fcfs(n, q, m);
-        else round_robin(n, q, m, quantum);
+        if (!strcmp(algo, "FCFS")) {
+    fcfs(n, q, m);
+}
+else if (!strcmp(algo, "RR")) {
+    round_robin(n, q, m, quantum);
+}
+else if (!strcmp(algo, "SJF")) {
+    sjf(n, q, m);
+}
+else if (!strcmp(algo, "PRIORITY")) {
+    priority_scheduling(n, q, m);
+}
+else if (!strcmp(algo, "SRTF")) {
+    srtf(n, q, m);
+}
     }
     print_json(algo, quantum);
     free(q); free(nodes); free(works); free(segs);
