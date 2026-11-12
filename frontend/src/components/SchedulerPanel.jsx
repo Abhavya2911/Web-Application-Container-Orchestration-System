@@ -3,6 +3,14 @@ import { useState } from 'react'
 
 const hue = (id) => (id * 67) % 360
 
+const algorithmNames = {
+  FCFS: 'First Come First Served',
+  RR: 'Round Robin',
+  SJF: 'Shortest Job First',
+  SRTF: 'Shortest Remaining Time First',
+  PRIORITY: 'Priority Scheduling',
+}
+
 function Gantt({ run }) {
   const timeline = JSON.parse(run.timelineJson || '[]')
   const names = Object.fromEntries(
@@ -102,6 +110,9 @@ export default function SchedulerPanel({
           >
             <option value="FCFS">First Come First Served</option>
             <option value="RR">Round Robin</option>
+            <option value="SJF">Shortest Job First (SJF)</option>
+            <option value="SRTF">Shortest Remaining Time First (SRTF)</option>
+            <option value="PRIORITY">Priority Scheduling</option>
           </select>
         </label>
 
@@ -112,7 +123,7 @@ export default function SchedulerPanel({
               type="number"
               min="1"
               value={quantum}
-              onChange={(e) => setQuantum(+e.target.value)}
+              onChange={(e) => setQuantum(Math.max(1, Number(e.target.value)))}
             />
           </label>
         )}
@@ -135,9 +146,8 @@ export default function SchedulerPanel({
         <>
           <h3>
             Run #{run.id}:{' '}
-            {run.algorithm === 'RR'
-              ? `Round Robin (quantum ${run.quantum})`
-              : 'FCFS'}
+            {algorithmNames[run.algorithm] ?? run.algorithm}
+            {run.algorithm === 'RR' ? ` (quantum ${run.quantum})` : ''}
           </h3>
 
           <Gantt run={run} />
@@ -253,7 +263,7 @@ export default function SchedulerPanel({
                       <td>
                         {r.algorithm === 'RR'
                           ? `RR (q=${r.quantum})`
-                          : 'FCFS'}
+                          : algorithmNames[r.algorithm] ?? r.algorithm}
                       </td>
                       <td>{r.avgWaiting.toFixed(2)}</td>
                       <td>{r.avgTurnaround.toFixed(2)}</td>
